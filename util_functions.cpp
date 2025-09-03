@@ -228,6 +228,7 @@ bool recursive_search(const string &path, const string &target)
 }
 
 //if a command impe=lementation is done here, use that and return true else return false and excecute externally
+//write is used instead of cout to help with pipelining
 bool implemented_commands(const vector<string> &tokens, const string &home_path, const string &starting_dir)
 {
     if(tokens.empty())
@@ -299,7 +300,8 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
             current_dir=get_cwd();
             if(tokens[1] == "-")
             {
-                cout<<target_dir<<endl;
+                string out = target_dir + "\n";
+                write(STDOUT_FILENO, out.c_str(), out.size());
             }
             //checking if what current directory is wrt to starting directory so that we can decide wether to display abs path or not
             if(starting_dir == current_dir.substr(0,starting_dir.size()))
@@ -336,22 +338,25 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
     
     if(command == "pwd")//easy, just print cwd
     {
-        cout<<get_cwd()<<endl;
+        string cwd = get_cwd() + "\n";
+        write(STDOUT_FILENO, cwd.c_str(), cwd.size());
         return true;
     }
 
     
     if(command == "echo")//as string woulld be tokenized, manually add spaces which solves multiple space issue
     {
+        string out;
         for(size_t i=1;i<tokens.size();i++)
         {
             if(i!=1)//space before every word except first
             {
-                cout<<" ";
+                out+=" ";
             }
-            cout<<tokens[i];
+            out+=tokens[i];
         }   
-        cout<<endl;
+        out += "\n";
+        write(STDOUT_FILENO, out.c_str(), out.size());
         return true;
     }
 
@@ -421,9 +426,9 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
 
             sort(entries.begin(),entries.end());//ls in sorted order
 
-            for(const string &name:entries)
+            for(size_t i=0; i<entries.size();i++)
             {
-                string filepath = ls_path+"/"+name;
+                string filepath = ls_path+"/"+entries[i];
 
                 struct stat st2;
                 if(stat(filepath.c_str(),&st2) == -1)
@@ -434,24 +439,24 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
 
                 if(long_version)
                 {
-                    cout<<check_permissions(st2.st_mode)<<" "
-                    <<st2.st_nlink<<" "
-                    <<getpwuid(st2.st_uid)->pw_name<<" "
-                    <<getgrgid(st2.st_gid)->gr_name<<" "
-                    <<st2.st_size<<" "
-                    <<string(ctime(&st2.st_mtime)).substr(0,16)<<" "
-                    <<name<<endl;
+
+                    string line = check_permissions(st2.st_mode) + " " +
+                    to_string(st2.st_nlink)+" "+
+                    getpwuid(st2.st_uid)->pw_name + " " +
+                    getgrgid(st2.st_gid)->gr_name + " " +
+                    to_string(st2.st_size) + " " +
+                    string(ctime(&st2.st_mtime)).substr(0,16) + " " +
+                    entries[i] + "\n";
+
+                    write(STDOUT_FILENO, line.c_str(), line.size());
                 }
 
                 else
                 {
-                    cout<<name<<" ";
+                    string line = entries[i] + "\n";
+                    write(STDOUT_FILENO, line.c_str(), line.size());
                 }
 
-            }
-            if(!long_version)
-            {
-                cout<<endl;
             }
 
         }
@@ -461,18 +466,21 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
             if(long_version)
             {
 
-                cout<<check_permissions(st.st_mode)<<" "
-                <<st.st_nlink<<" "
-                <<getpwuid(st.st_uid)->pw_name<<" "
-                <<getgrgid(st.st_gid)->gr_name<<" "
-                <<st.st_size<<" "
-                <<string(ctime(&st.st_mtime)).substr(0,16)<<" "
-                <<ls_path<<endl;
+                string line = check_permissions(st.st_mode) + " " +
+                to_string(st.st_nlink)+" "+
+                getpwuid(st.st_uid)->pw_name + " " +
+                getgrgid(st.st_gid)->gr_name + " " +
+                to_string(st.st_size) + " " +
+                string(ctime(&st.st_mtime)).substr(0,16) + " " +
+                ls_path + "\n";
+
+                write(STDOUT_FILENO, line.c_str(), line.size());
             }    
 
             else
             {
-                cout<<ls_path<<endl;
+                string line = ls_path + "\n";
+                write(STDOUT_FILENO, line.c_str(), line.size());
             }
             
         }
@@ -522,8 +530,9 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
             state_extended+="+";
         }
 
-        cout<<"pid -- "<<process_id<<"\n";
-        cout<<"Processs Status -- "<<state_extended<<"\n";
+        string out = "pid -- " + to_string(process_id) + "\n";
+
+        out += "Processs Status -- " + state_extended + "\n";
 
         ifstream statm_in(statm_location);
         if(!statm_in)
@@ -534,7 +543,7 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
         long file_size;
         statm_in>>file_size;
         statm_in.close();
-        cout<<"memory -- "<<file_size<<"\n";
+        out += "memory -- " + to_string(file_size) + "\n";
 
         char exe_path[PATH_MAX];
         ssize_t l = readlink(exe_location.c_str(),exe_path,sizeof(exe_path));
@@ -545,8 +554,9 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
         }
 
         exe_path[l] = '\0';
-        cout<<"Executable Path -- "<<exe_path<<"\n";
+        out += "Executable Path -- " + string(exe_path) + "\n";
 
+        write(STDOUT_FILENO, out.c_str(), out.size());
         return true;
     }
 
@@ -565,11 +575,13 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
 
         if(file_exists)
         {
-            cout<<"True\n";
+            string out = "True\n";
+            write(STDOUT_FILENO, out.c_str(), out.size());
         }
         else
         {
-            cout<<"False\n";
+            string out = "False\n";
+            write(STDOUT_FILENO, out.c_str(), out.size());
         }
         return true;
     }

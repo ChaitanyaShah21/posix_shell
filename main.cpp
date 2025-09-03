@@ -2,8 +2,106 @@
 #include "util_functions.h"
 #include<signal.h>
 #include<fcntl.h>
+#include<sys/wait.h>
 
 using namespace std;
+
+vector<string> split_pipeline(const string &command)
+{
+    vector<string> parts;
+    string part;
+
+    for(char ch:command)
+    {
+        if(ch=='|')
+        {
+            if(!part.empty())
+            {
+                parts.push_back(trim_space(part));
+                part.clear();
+            }
+
+        }
+        else
+        {
+            part.push_back(ch);
+        }
+    }
+
+    if(!part.empty()) //push last token into vector if it is availible
+    {
+        parts.push_back(trim_space(part));
+    }
+
+    return parts;
+}
+
+void pipeline(vector<string>parts, const string &home, const string &startingpath)
+{
+    int n = parts.size();
+    // pipe() creates a pipe, each pipe has 2 ends :. number of pipeline 2*(n-1)
+    vector<int> pipelines(2*(n-1));
+
+    for(int i=0;i<n-1;i++)
+    {
+        pipe(pipelines.data()+2*i); //pipelines.data() returns pointer to first element,pipe() fills i,i+1 element pipeline therefore 2*i 
+        //i=0 fills 0,1 ,i=1 fills 2,3 , i=2 fills 4,5 , and so on
+    }
+
+    for(int i=0; i<n; i++)
+    {
+        //use fork for every command so that processes dont exit before reading from last pipe and writing to next pipe
+        pid_t pid = fork();
+        if(pid==0)//child
+        {
+            //read from last pipe
+            if(i>0)
+            {
+                dup2(pipelines[2*(i-1)], STDIN_FILENO);
+            }
+
+            //write to next pipe
+            if(i<n-1)
+            {
+                dup2(pipelines[(2*i)+1], STDOUT_FILENO);
+            }
+
+            //closing pipes in child, as they are already duplicated in stdout,stdin
+            for(int j=0;j<2*(n-1);j++)
+            {
+                close(pipelines[j]);
+            }
+
+            //run this
+            vector<string> tokens = split_command(parts[i]);
+            if(tokens.empty())
+            {
+                return;
+            }
+
+            if(!implemented_commands(tokens, home, startingpath))
+            {
+                excecute_externally(tokens);
+            }
+            exit(0);
+        }
+    }
+
+    //close all parent pipes
+    for(int j=0;j<2*(n-1);j++)
+    {
+        close(pipelines[j]);
+    }
+
+    // wait for all children to finish
+    for(int i=0;i<n;i++)
+    {
+        wait(nullptr);
+    }
+
+
+}
+
 
 int main()
 {
@@ -148,6 +246,14 @@ int main()
         // }
         // cout<<endl;
         const string starting_path = get_cwd();
+
+        //checking if pipelines are there
+        vector<string> pipeline_parts = split_pipeline(command);
+        if(pipeline_parts.size()>1)
+        {
+            pipeline(pipeline_parts, home, starting_path);
+            continue;
+        }
 
         if(bg)
         {
