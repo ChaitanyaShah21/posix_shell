@@ -6,6 +6,99 @@
 
 using namespace std;
 
+vector<string> io_redirection(vector<string> &tokens)
+{
+
+    // io redirection is handled by changing the input and output fd
+    string input_file, output_file;
+    bool append = false;
+    vector<string> io_processed_tokens;
+
+    for(size_t i=0;i<tokens.size();i++)
+    {
+        if(tokens[i] == "<")
+        {
+            if(i+1 < tokens.size())
+            {
+                input_file = tokens[i+1];
+                i++;
+            }
+        }
+
+        else if(tokens[i] == ">")
+        {
+            if(i+1 < tokens.size())
+            {
+                output_file = tokens[i+1];
+                append = false;
+                i++;
+            }
+        }
+
+        else if(tokens[i] == ">>")
+        {
+            if(i+1 < tokens.size())
+            {
+                output_file = tokens[i+1];
+                append = true;
+                i++;
+            }
+        }
+
+        else
+        {
+            io_processed_tokens.push_back(tokens[i]);
+        }
+        
+    }
+
+
+    //redirecting input /output when applicable
+    if(!input_file.empty())
+    {
+        int fd = open(input_file.c_str(),O_RDONLY);
+
+        if(fd<0)
+        {
+            perror("Input file error");
+            exit(1);
+        }
+
+        else
+        {
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+        }
+    }
+
+    if(!output_file.empty())
+    {
+        int fd;
+        if(append)
+        {
+            fd = open(output_file.c_str(),O_WRONLY|O_CREAT|O_APPEND, 0644);
+        }
+        else
+        {
+            fd = open(output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        }
+
+        if(fd < 0)
+        {
+            perror("Output file error\n");
+            exit(1);
+        }
+
+        else
+        {
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+    }
+
+    return io_processed_tokens;
+}
+
 vector<string> split_pipeline(const string &command)
 {
     vector<string> parts;
@@ -44,7 +137,11 @@ void pipeline(vector<string>parts, const string &home, const string &startingpat
 
     for(int i=0;i<n-1;i++)
     {
-        pipe(pipelines.data()+2*i); //pipelines.data() returns pointer to first element,pipe() fills i,i+1 element pipeline therefore 2*i 
+        if(pipe(pipelines.data()+2*i)<0)
+        {
+            perror("pipe failed");
+            exit(1);
+        } //pipelines.data() returns pointer to first element,pipe() fills i,i+1 element pipeline therefore 2*i 
         //i=0 fills 0,1 ,i=1 fills 2,3 , i=2 fills 4,5 , and so on
     }
 
@@ -52,6 +149,11 @@ void pipeline(vector<string>parts, const string &home, const string &startingpat
     {
         //use fork for every command so that processes dont exit before reading from last pipe and writing to next pipe
         pid_t pid = fork();
+        if(pid < 0)
+        {
+            perror("fork failed");
+            exit(1);
+        }
         if(pid==0)//child
         {
             //read from last pipe
@@ -74,14 +176,18 @@ void pipeline(vector<string>parts, const string &home, const string &startingpat
 
             //run this
             vector<string> tokens = split_command(parts[i]);
+
             if(tokens.empty())
             {
                 return;
             }
 
-            if(!implemented_commands(tokens, home, startingpath))
+            vector<string> processed_tokens = io_redirection(tokens);
+
+
+            if(!implemented_commands(processed_tokens, home, startingpath))
             {
-                excecute_externally(tokens);
+                excecute_externally(processed_tokens);
             }
             exit(0);
         }
@@ -140,103 +246,6 @@ int main()
             tokens.pop_back();
         }
 
-        // io redirection is handled by changing the input and output fd
-        string input_file, output_file;
-        bool append = false;
-        vector<string> io_processed_tokens;
-
-        for(size_t i=0;i<tokens.size();i++)
-        {
-            if(tokens[i] == "<")
-            {
-                if(i+1 < tokens.size())
-                {
-                    input_file = tokens[i+1];
-                    i++;
-                }
-            }
-
-            else if(tokens[i] == ">")
-            {
-                if(i+1 < tokens.size())
-                {
-                    output_file = tokens[i+1];
-                    append = false;
-                    i++;
-                }
-            }
-
-            else if(tokens[i] == ">>")
-            {
-                if(i+1 < tokens.size())
-                {
-                    output_file = tokens[i+1];
-                    append = true;
-                    i++;
-                }
-            }
-
-            else
-            {
-                io_processed_tokens.push_back(tokens[i]);
-            }
-            
-        }
-
-        //creating a backup of standard input/output fd to use them later
-        int stdin_copy = dup(STDIN_FILENO);
-        int stdout_copy = dup(STDOUT_FILENO);
-
-        //redirecting input /output when applicable
-        if(!input_file.empty())
-        {
-            int fd = open(input_file.c_str(),O_RDONLY);
-    
-            if(fd<0)
-            {
-                perror("Input file error");
-                dup2(stdin_copy, STDIN_FILENO);
-                dup2(stdout_copy, STDOUT_FILENO);
-                close(stdin_copy);
-                close(stdout_copy);
-                continue;
-            }
-
-            else
-            {
-                dup2(fd, STDIN_FILENO);
-                close(fd);
-            }
-        }
-
-        if(!output_file.empty())
-        {
-            int fd;
-            if(append)
-            {
-                fd = open(output_file.c_str(),O_WRONLY|O_CREAT|O_APPEND, 0644);
-            }
-            else
-            {
-                fd = open(output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            }
-
-            if(fd < 0)
-            {
-                perror("Output file error\n");
-                dup2(stdin_copy, STDIN_FILENO);
-                dup2(stdout_copy, STDOUT_FILENO);
-                close(stdin_copy);
-                close(stdout_copy);
-                continue;
-            }
-
-            else
-            {
-                dup2(fd, STDOUT_FILENO);
-                close(fd);
-            }
-        }
 
         // //debug code to check this works
 
@@ -255,11 +264,14 @@ int main()
             continue;
         }
 
+        
+
         if(bg)
         {
-            pid_t pid = fork();
+            pid_t pid = fork(); //fork is done regardless of bg or not as we have to keep shell alive and make sure input/ output of last command or parent does not effect this command
             if(pid ==0)// child 
             {
+                vector<string> io_processed_tokens = io_redirection(tokens);
                 if(!implemented_commands(io_processed_tokens, home, starting_path))
                 {
                     excecute_externally(io_processed_tokens);
@@ -280,17 +292,30 @@ int main()
 
         else
         {
-            if(!implemented_commands(io_processed_tokens,home,starting_path))
+            pid_t pid = fork();
+            if(pid == 0)
             {
-                excecute_externally(io_processed_tokens);
+                vector<string> io_processed_tokens = io_redirection(tokens);
+                if(!implemented_commands(io_processed_tokens,home,starting_path))
+                {
+                    excecute_externally(io_processed_tokens);
+                }
+                exit(0);
             }
+
+            else if(pid>0)
+            {
+                waitpid(pid, nullptr,0);
+            }
+
+            else
+            {
+                perror("fork failed");
+                continue;
+            }
+
         }
 
-        //resetting standard input/output
-        dup2(stdin_copy, STDIN_FILENO);
-        dup2(stdout_copy, STDOUT_FILENO);
-        close(stdin_copy);
-        close(stdout_copy);
 
     }
 

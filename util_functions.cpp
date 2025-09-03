@@ -71,6 +71,10 @@ vector<string> split_command(const string &command)
         {
             if(!token.empty())
             {
+                if((token.front() == '"' && token.back() == '"') || (token.front() == '\'' && token.back() == '\'') )
+                {
+                    token = token.substr(1, token.size()-2);
+                }
                 token_list.push_back(token);
                 token.clear();
             }
@@ -83,6 +87,10 @@ vector<string> split_command(const string &command)
 
     if(!token.empty())
     {
+        if((token.front() == '"' && token.back() == '"') || (token.front() == '\'' && token.back() == '\'') )
+        {
+            token = token.substr(1, token.size()-2);
+        }
         token_list.push_back(token);
     }
     return token_list;
