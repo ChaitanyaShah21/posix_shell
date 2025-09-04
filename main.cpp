@@ -6,6 +6,17 @@
 
 using namespace std;
 
+pid_t fg_pgid = -1; //pid for foreground process group
+
+struct job // used to store suspended background job
+{
+    pid_t pid;
+    string command;
+    bool stopped;
+};
+
+vector<job> jobs;
+
 vector<string> io_redirection(vector<string> &tokens)
 {
 
@@ -209,6 +220,29 @@ void pipeline(vector<string>parts, const string &home, const string &startingpat
 }
 
 
+void handle_sigint(int sig)
+{
+    if(fg_pgid > 0)
+    {
+        kill(-fg_pgid, SIGINT); // send SIGINT to whole fg group
+    }
+}
+
+void handle_sigtstp(int sig)
+{
+    if(fg_pgid > 0)
+    {
+        kill(-fg_pgid, SIGTSTP); // send sigtstp to whole fg grp
+    }
+}
+
+void handle_sigchld(int sig)
+{
+    //reap dead children
+    int status;
+    while(waitpid(-1,&status,WNOHANG) > 0); // wait to reap all children
+}
+
 int main()
 {
     const char* home_env_variable = getenv("HOME");
@@ -218,7 +252,12 @@ int main()
         home = home_env_variable;
     }
     else home = get_cwd();
-    signal(SIGCHLD, SIG_IGN);
+    signal(SIGCHLD, handle_sigchld);
+    signal(SIGINT, handle_sigint);
+    signal(SIGTSTP, handle_sigtstp);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
+
     while(true)
     {
         print_command_lhs(home);//print lhs every time
@@ -271,6 +310,13 @@ int main()
             pid_t pid = fork(); //fork is done regardless of bg or not as we have to keep shell alive and make sure input/ output of last command or parent does not effect this command
             if(pid ==0)// child 
             {
+                setpgid(0,0); //putting in its own process group
+
+                //restore default signal handelling in bg child so that it reacts to terminal signals normally
+                signal(SIGINT, SIG_DFL);
+                signal(SIGTSTP, SIG_DFL);
+
+
                 vector<string> io_processed_tokens = io_redirection(tokens);
                 if(!implemented_commands(io_processed_tokens, home, starting_path))
                 {
@@ -295,6 +341,12 @@ int main()
             pid_t pid = fork();
             if(pid == 0)
             {
+                setpgid(0,0); // ctrl z pauses the whole fg group, not just current task. so we have to put child process in different group to avoid pausing all processes at once
+
+                //restore default signal handelling in bg child so that it reacts to terminal signals normally
+                signal(SIGINT, SIG_DFL);
+                signal(SIGTSTP, SIG_DFL);
+
                 vector<string> io_processed_tokens = io_redirection(tokens);
                 if(!implemented_commands(io_processed_tokens,home,starting_path))
                 {
@@ -305,7 +357,25 @@ int main()
 
             else if(pid>0)
             {
-                waitpid(pid, nullptr,0);
+                setpgid(pid,pid);// can fail sometimes doe to race condition as child also calls setpgid
+
+                fg_pgid = pid; //mark as foreground
+                tcsetpgrp(STDIN_FILENO, fg_pgid); //giving terminal control to child
+
+                int status;
+                waitpid(-fg_pgid, &status, WUNTRACED|WCONTINUED); //WUNTRACED detects when process stopped
+                
+                tcsetpgrp(STDIN_FILENO, getpgrp()); // child finsihed, give terminal back to shell
+                
+                if(WIFSTOPPED(status)) // stopped by ctrl z
+                {
+                    cout<<"\n["<<pid<<"] stopped \n";
+                    jobs.push_back({pid, command, true});
+                }
+
+                fg_pgid = -1; //done, reset
+                
+
             }
 
             else
