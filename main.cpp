@@ -3,6 +3,9 @@
 #include<signal.h>
 #include<fcntl.h>
 #include<sys/wait.h>
+#include<readline/readline.h>
+#include<readline/history.h>
+#include<dirent.h>
 
 using namespace std;
 
@@ -16,6 +19,214 @@ struct job // used to store suspended background job
 };
 
 vector<job> jobs;
+
+vector<string> built_in_funcs = {"cd", "ls", "pwd", "echo", "pinfo", "search", "history"}; // used to check in autocorrect
+
+vector<string> find_matches(const char *text, bool is_command)
+{
+    vector<string> matches;
+    string prefix(text);
+
+    if(is_command)
+    {
+        for(const string &command:built_in_funcs)
+        {
+            if(command.compare(0,prefix.size(),prefix) == 0)
+            {
+                matches.push_back(command);
+            }
+        }
+    
+
+        //checking non built in commands
+        static vector<string> not_built_in;// static so that system commands are not searched and loaded everytime one presses tab
+        if(not_built_in.empty())
+        {
+            char *path = getenv("PATH"); //inbuilt commands stored in PATH
+            if(path)
+            {
+                stringstream ss(path);//converts string to stream like cin so that we can use getline to split string using delimter like :, as PATH has multiple paths seperated by :
+                string dir;
+                while(getline(ss,dir,':'))
+                {
+                    DIR *d1 = opendir(dir.c_str());
+                    if(!d1)
+                    {
+                        continue;//cannot open this dir, move to next
+                    }
+
+                    struct dirent* entry;
+                    while((entry = readdir(d1))!=nullptr)
+                    {
+                        not_built_in.push_back(entry->d_name);
+                    }
+                    closedir(d1);
+                }
+
+                sort(not_built_in.begin(), not_built_in.end());
+
+                //move all non unique elemtns to back and give pointer to end of unique list, then erase from there to end of list(all duplicate)
+                not_built_in.erase(unique(not_built_in.begin(),not_built_in.end()), not_built_in.end());
+
+            }
+        }
+
+        for(const string&command :not_built_in)
+        {
+            if(command.compare(0,prefix.size(),prefix) == 0)
+            {
+                matches.push_back(command);
+            }
+        }
+
+    }
+    else //not command , so file or directory
+    {
+        string dir = ".";//by defualt current directory is searched
+        string base = prefix;
+
+        size_t slash = prefix.find_last_of('/');//if path is given, search that instead, base becomes the incomplete last part of path
+        if(slash != string::npos)//npos is used for not found
+        {
+            dir = prefix.substr(0,slash);// form start to last /
+            if(dir.empty()) 
+            {
+                dir = "/";
+            }
+
+            base = prefix.substr(slash+1);//remaining part
+        }
+
+        DIR * d = opendir(dir.c_str());
+        if(d)
+        {
+            struct dirent * entry;
+            while((entry = readdir(d)) != nullptr)
+            {
+                string name = entry->d_name;
+                if(name.compare(0, base.size(), base) == 0)
+                {
+                    string match = (dir == ".") ? name : (dir + "/" + name);
+                    if(entry->d_type == DT_DIR)
+                    {
+                        match += "/";//directories autocomplete end with /
+                    }
+                    matches.push_back(match);
+                }
+            }
+        }
+    }
+
+    return matches;
+}
+
+vector<string> light_tokenize(const string &line)
+{
+    vector<string> tokens;
+    string token;
+
+    for(size_t i=0; i<line.size(); i++)
+    {
+        char ch = line[i];
+
+        //if blank, token complete, can add
+        if(isspace((unsigned char)ch))
+        {
+            if(!token.empty())
+            {
+                tokens.push_back(token);
+                token.clear();
+            }
+        }
+
+        //if special char add token then add that char
+        else if(ch =='|' || ch == ';' || ch == '&' || ch == '<' || ch == '>')
+        {
+            if(!token.empty())
+            {
+                tokens.push_back(token);
+                token.clear();
+            }
+
+            if((ch == '>') && (i+1<line.size()) && (line[i+1] == '>'))
+            {
+                tokens.push_back(">>");
+                i++;
+            }
+            else
+            {
+                tokens.push_back(string(1,ch));
+            }
+        }
+        else
+        {
+            token.push_back(ch);
+        }
+    }
+
+    if(!token.empty())
+    {
+        tokens.push_back(token);
+    }
+
+    return tokens;
+}
+
+char **list_matches(const char*text, int start, int end)
+{
+    string line(rl_line_buffer);//we need whole line, not just current word(text) to figure out if it is command or filename
+    vector<string> tokens = light_tokenize(line);
+
+    bool is_command = false;
+    if(tokens.empty())
+    {
+        is_command = true;
+    }
+
+    else
+    {
+        string last = tokens.back();
+
+        if(last == "|" || last == ";" || last == "&")
+        {
+            is_command = true;
+        }
+
+        else if(tokens.size() >=2)
+        {
+            string prev = tokens[tokens.size() -2];
+            if(prev == "|" || prev==";" || prev=="&")
+            {
+                is_command = true;
+            }
+        }
+
+        else if(tokens.size() == 1 && start ==0)
+        {
+            is_command = true;
+        }
+    }
+
+    vector<string> matches = find_matches(text, is_command);
+
+    if(matches.empty())
+    {
+        return nullptr;
+    }
+
+    // array for readline
+
+    char ** completion_options = (char**)malloc((matches.size()+1) * sizeof(char*));
+    for(size_t i=0;i<matches.size();i++)
+    {
+        completion_options[i] = strdup(matches[i].c_str());
+    }
+
+    completion_options[matches.size()] = nullptr;
+
+    return completion_options;
+    
+}
 
 vector<string> io_redirection(vector<string> &tokens)
 {
@@ -245,38 +456,44 @@ void handle_sigchld(int sig)
 
 int main()
 {
-    const char* home_env_variable = getenv("HOME");
-    string home;
-    if(home_env_variable)
-    {
-        home = home_env_variable;
-    }
-    else home = get_cwd();
+
+    string home = get_cwd();
     signal(SIGCHLD, handle_sigchld);
     signal(SIGINT, handle_sigint);
     signal(SIGTSTP, handle_sigtstp);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
 
+    rl_attempted_completion_function = list_matches;
+    using_history();
+    read_history("shell_history.txt");
+    stifle_history(20);
+
     while(true)
     {
-        print_command_lhs(home);//print lhs every time
 
-        string command;
         //take input, verify and remove unnessary whitespaces
-        if(!getline(cin,command))
+        char *input = readline(print_command_lhs(home).c_str());
+        if(!input)
         {
-            cout<<endl;
+            cout<<endl; //ctrl d handling
             break;
         }
-        
+
+        if(*input) add_history(input);// add in history
+        string command (input);
+        free(input);
         command = trim_space(command);
         if(command.empty())
         {
             continue;
         }
+
+
         // splitting commands into tokens so that we can use them
         vector<string> tokens = split_command(command);
+
+
 
         bool bg =false; // check for backgriund task
         if(!tokens.empty() && tokens.back() == "&")
@@ -285,6 +502,19 @@ int main()
             tokens.pop_back();
         }
 
+        const string starting_path = get_cwd();
+
+        if(!tokens.empty() && tokens[0] == "cd")
+        {
+            implemented_commands(tokens,home,starting_path);
+            continue;
+        }
+
+        if(!tokens.empty() && tokens[0] == "exit")
+        {
+            write_history("shell_history.txt");
+            break;
+        }
 
         // //debug code to check this works
 
@@ -293,7 +523,7 @@ int main()
         //     cout<<s<<" ";
         // }
         // cout<<endl;
-        const string starting_path = get_cwd();
+
 
         //checking if pipelines are there
         vector<string> pipeline_parts = split_pipeline(command);
@@ -388,6 +618,6 @@ int main()
 
 
     }
-
+    write_history("shell_history.txt");
     return 0;
 }

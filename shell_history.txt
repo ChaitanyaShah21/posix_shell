@@ -1,0 +1,8 @@
+ls
+echo
+cd ..
+cd ..
+cd ..
+ls
+cd testing
+history

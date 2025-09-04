@@ -8,9 +8,12 @@
 #include<sys/stat.h>
 #include<grp.h>
 #include<ctime>
+#include<readline/readline.h>
+#include<readline/history.h>
 
 bool before_start = false;
 using namespace std;
+
 
 string get_cwd() //just adding error detection to normal getcwd 
 {
@@ -97,7 +100,7 @@ vector<string> split_command(const string &command)
 }
 
 //finally print linux like prompt(lhs of command)
-void print_command_lhs(const string &home_path)
+string print_command_lhs(const string &home_path)
 {
     passwd *pw = getpwuid(getuid());
     const char* user = pw? pw->pw_name:"user";
@@ -107,8 +110,8 @@ void print_command_lhs(const string &home_path)
     gethostname(host_name,sizeof(host_name)-1);
 
     string cwd = get_cwd();
-    cerr<<user<<"@"<<host_name<<":"<<return_modified_path(cwd,home_path)<<"> ";
-    cerr.flush();
+    return (string(user)+"@"+host_name+":"+return_modified_path(cwd,home_path)+"> ");
+
 }
 
 void excecute_externally( vector<string> tokens)
@@ -591,6 +594,63 @@ bool implemented_commands(const vector<string> &tokens, const string &home_path,
             string out = "False\n";
             write(STDOUT_FILENO, out.c_str(), out.size());
         }
+        return true;
+    }
+
+    if(command == "history")
+    {
+        int num;
+        if(tokens.size() == 1)
+        {
+            num = 10;//default
+        }
+        else if(tokens.size() == 2)
+        {
+            try
+            {
+                num = stoi(tokens[1]);
+            }
+            catch(const exception& e)
+            {
+                cerr<<"Invalid Input\n";
+                return true;
+            }
+            
+        }
+        else
+        {
+            cerr<<"Invalid Input\n";
+            return true;
+        }
+
+        if(num>10)
+        {
+            num = 10; //max limit is 10
+        }
+        if(num<0)
+        {
+            num = 0;
+        }
+
+        int count = history_length;
+        if(count<=0)
+        {
+            return true;
+        }
+
+        HIST_ENTRY **history = history_list();
+        if(!history)
+        {
+            return true;
+        }
+
+        int start = max(0, (count-num));
+        for(int i=start;i<count;i++)
+        {
+            string line = string(history[i] -> line) + "\n";
+            write(STDOUT_FILENO, line.c_str(), line.size());
+        }
+
         return true;
     }
 
